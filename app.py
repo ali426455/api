@@ -1,7 +1,4 @@
-"""
-داشبورد RTM برای اسکالپ EUR/USD
-ورود / حد ضرر / خروج — اگر بازار مناسب نبود: صبر کن
-"""
+"""داشبورد RTM — همیشه عدد ورود، حد ضرر و تارگت را نشان می‌دهد."""
 
 import os
 import sys
@@ -17,29 +14,23 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from src.backtest import BacktestEngine
 from src.data_fetcher import DataFetcher
 from src.rtm import RTMStrategy
-from src.strategy import SignalType
 
 
-st.set_page_config(
-    page_title="ربات RTM یورو/دلار",
-    page_icon="📉",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
+st.set_page_config(page_title="RTM یورو دلار", page_icon="📉", layout="wide")
 st.markdown(
     """
 <style>
-    .main { direction: rtl; text-align: right; }
-    h1, h2, h3 { color: #7dd3fc; }
-    .price-box { background:#111827; border:1px solid #334155; border-radius:14px; padding:16px 18px; }
-    .card { background:#111827; border-radius:14px; padding:16px; text-align:center; border:1px solid #334155; }
-    .wait-banner { background:#422006; border:1px solid #f59e0b; color:#fde68a; padding:18px 20px; border-radius:14px; font-size:20px; font-weight:700; }
-    .buy-banner { background:#052e16; border:1px solid #22c55e; color:#bbf7d0; padding:18px 20px; border-radius:14px; font-size:20px; font-weight:700; }
-    .sell-banner { background:#450a0a; border:1px solid #ef4444; color:#fecaca; padding:18px 20px; border-radius:14px; font-size:20px; font-weight:700; }
+  .main { direction: rtl; text-align: right; }
+  .banner { padding: 18px 22px; border-radius: 16px; font-size: 22px; font-weight: 800; margin: 8px 0 18px; }
+  .wait { background:#3b2a05; color:#fde68a; border:1px solid #f59e0b; }
+  .buy { background:#052e16; color:#bbf7d0; border:1px solid #22c55e; }
+  .sell { background:#450a0a; color:#fecaca; border:1px solid #ef4444; }
+  .num { background:#0f172a; border-radius:16px; padding:18px 10px; text-align:center; border:2px solid #334155; }
+  .num .lbl { font-size:15px; color:#94a3b8; }
+  .num .val { font-size:34px; font-weight:900; letter-spacing:0.5px; color:#fff; font-family: ui-monospace, monospace; }
+  .num .sub { font-size:13px; color:#cbd5e1; margin-top:4px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -61,8 +52,7 @@ def _strip_tz(series):
 def fetch_data(period, interval):
     fetcher = DataFetcher()
     try:
-        ticker = yf.Ticker("EURUSD=X")
-        df = ticker.history(period=period, interval=interval)
+        df = yf.Ticker("EURUSD=X").history(period=period, interval=interval)
         if df is not None and not df.empty:
             df = df.reset_index()
             df.columns = [c.lower().replace(" ", "_") for c in df.columns]
@@ -78,15 +68,17 @@ def fetch_data(period, interval):
 
 def get_live_price():
     try:
-        url = "https://scanner.tradingview.com/forex/scan"
-        payload = {"symbols": {"tickers": ["FX_IDC:EURUSD"]}, "columns": ["close", "bid", "ask"]}
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.post(url, json=payload, headers=headers, timeout=3)
+        res = requests.post(
+            "https://scanner.tradingview.com/forex/scan",
+            json={"symbols": {"tickers": ["FX_IDC:EURUSD"]}, "columns": ["close", "bid", "ask"]},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=3,
+        )
         if res.status_code == 200 and res.json().get("data"):
-            values = res.json()["data"][0]["d"]
-            price = float(values[0])
-            bid = float(values[1]) if values[1] else round(price - 0.00006, 5)
-            ask = float(values[2]) if values[2] else round(price + 0.00006, 5)
+            v = res.json()["data"][0]["d"]
+            price = float(v[0])
+            bid = float(v[1]) if v[1] else round(price - 0.00006, 5)
+            ask = float(v[2]) if v[2] else round(price + 0.00006, 5)
             return price, bid, ask
     except Exception:
         pass
@@ -100,27 +92,17 @@ def get_live_price():
     return None, None, None
 
 
-def level_card(title, value, sub, color):
-    return f"""
-    <div class="card" style="border-color:{color};">
-        <div style="color:{color}; font-size:13px;">{title}</div>
-        <div style="color:#fff; font-size:26px; font-weight:800; letter-spacing:0.5px;">{value}</div>
-        <div style="color:#94a3b8; font-size:12px;">{sub}</div>
-    </div>
-    """
-
-
-def run_analysis(period, interval, config):
+def analyze(period, interval, config):
     df = fetch_data(period, interval)
     live, bid, ask = get_live_price()
-    if live and df is not None and not df.empty:
+    if live is not None and df is not None and not df.empty:
         df.loc[df.index[-1], "close"] = live
     strategy = RTMStrategy(config=config)
-    ctx, signal = strategy.analyze(df)
+    ctx, plan = strategy.analyze(df)
     return {
         "df": df,
-        "signal": signal,
         "ctx": ctx,
+        "plan": plan,
         "live": live,
         "bid": bid,
         "ask": ask,
@@ -128,171 +110,124 @@ def run_analysis(period, interval, config):
     }
 
 
+def card(title, value, sub, color):
+    shown = f"{value:.5f}" if value else "—"
+    return f"""
+    <div class="num" style="border-color:{color}">
+      <div class="lbl">{title}</div>
+      <div class="val" style="color:{color}">{shown}</div>
+      <div class="sub">{sub}</div>
+    </div>
+    """
+
+
 with st.sidebar:
     st.header("تنظیمات RTM")
-    period = st.selectbox("بازه داده", ["5d", "1mo", "3mo"], index=1)
+    period = st.selectbox("بازه", ["5d", "1mo", "3mo"], index=1)
     interval = st.selectbox("تایم‌فریم", ["5m", "15m", "30m", "1h"], index=0)
-    swing_n = st.slider("حساسیت سوئینگ", 2, 6, 3)
-    max_zone = st.slider("حداکثر عرض ناحیه (پیپ)", 10, 35, 22)
-    min_rr = st.slider("حداقل نسبت سود به ضرر", 1.0, 3.0, 1.5, 0.1)
-    min_conf = st.slider("حداقل اطمینان", 50, 85, 62)
+    max_zone = st.slider("حداکثر عرض ناحیه (پیپ)", 12, 35, 28)
+    min_rr = st.slider("حداقل سود به ضرر", 1.0, 3.0, 1.2, 0.1)
     analyze_btn = st.button("تحلیل مجدد بازار", type="primary", use_container_width=True)
-    st.caption("دکمه ریفرش بالا فقط قیمت را عوض می‌کند، تحلیل را تکرار نمی‌کند.")
+    st.caption("ریفرش فقط قیمت را عوض می‌کند. اعداد ورود/حدضرر/تارگت ثابت می‌مانند مگر قیمت به ناحیه برسد.")
 
+config = {"max_zone_pips": max_zone, "min_rr": min_rr}
 
-config = {
-    "swing_n": swing_n,
-    "max_zone_pips": max_zone,
-    "min_rr": min_rr,
-    "min_confidence": min_conf,
-}
+if "rtm" not in st.session_state or analyze_btn:
+    with st.spinner("در حال خواندن نواحی RTM..."):
+        st.session_state.rtm = analyze(period, interval, config)
 
-if "analysis" not in st.session_state or analyze_btn:
-    with st.spinner("در حال خواندن ساختار بازار و نواحی RTM..."):
-        st.session_state.analysis = run_analysis(period, interval, config)
+state = st.session_state.rtm
+df, ctx, plan = state["df"], state["ctx"], state["plan"]
 
-state = st.session_state.analysis
-df = state["df"]
-signal = state["signal"]
-ctx = state["ctx"]
+st.title("نقاط معامله RTM — EUR/USD")
+st.caption("سبک Read The Market: ورود لیمیت روی لبه ناحیه، حد ضرر پشت ناحیه، تارگت روی ناحیه مخالف.")
 
-st.title("ربات اسکالپ EUR/USD — استراتژی RTM")
-st.caption("ورود فقط روی ناحیه عرضه/تقاضا. اگر ستاپ نباشد، صبر کن.")
-
-price_col, btn_col, meta_col = st.columns([2.2, 1, 2])
-with btn_col:
-    refresh_price = st.button("ریفرش قیمت", use_container_width=True)
-
-if refresh_price:
-    live, bid, ask = get_live_price()
-    if live:
-        state["live"] = live
-        state["bid"] = bid
-        state["ask"] = ask
-        state["updated"] = datetime.now().strftime("%H:%M:%S")
-    else:
-        st.warning("قیمت زنده الان در دسترس نبود. همان قیمت قبلی نمایش داده می‌شود.")
+top1, top2, top3 = st.columns([2, 1, 2])
+with top2:
+    if st.button("ریفرش قیمت", use_container_width=True):
+        live, bid, ask = get_live_price()
+        if live:
+            state["live"], state["bid"], state["ask"] = live, bid, ask
+            state["updated"] = datetime.now().strftime("%H:%M:%S")
+            plan.apply_price(live)
+        else:
+            st.warning("قیمت زنده نیامد.")
 
 live = state.get("live")
 price = live if live else float(df["close"].iloc[-1])
+plan.apply_price(price)
 
-with price_col:
+with top1:
     prev = float(df["close"].iloc[-2]) if len(df) > 1 else price
-    delta = (price - prev) / prev * 100 if prev else 0
-    st.metric("قیمت زنده EUR/USD", f"{price:.5f}", f"{delta:+.3f}%")
-
-with meta_col:
-    bid = state.get("bid")
-    ask = state.get("ask")
-    spread = f"{((ask - bid) / 0.0001):.1f} پیپ" if bid and ask else "—"
+    chg = (price - prev) / prev * 100 if prev else 0
+    st.metric("قیمت زنده", f"{price:.5f}", f"{chg:+.3f}%")
+with top3:
     st.write(f"ساختار: **{ctx.structure_text}**")
-    st.write(f"اسپرد: **{spread}** | به‌روزرسانی قیمت: **{state.get('updated', '—')}**")
+    st.write(f"آخرین قیمت: **{state.get('updated', '—')}** | فاصله تا ورود: **{plan.distance_pips:.1f} پیپ**")
 
-st.markdown("---")
-
-if signal.signal_type == SignalType.BUY:
-    st.markdown(f'<div class="buy-banner">خرید — {signal.reason}</div>', unsafe_allow_html=True)
-elif signal.signal_type == SignalType.SELL:
-    st.markdown(f'<div class="sell-banner">فروش — {signal.reason}</div>', unsafe_allow_html=True)
+if plan.status == "ENTER" and plan.side == "BUY":
+    st.markdown(f'<div class="banner buy">{plan.reason}</div>', unsafe_allow_html=True)
+elif plan.status == "ENTER" and plan.side == "SELL":
+    st.markdown(f'<div class="banner sell">{plan.reason}</div>', unsafe_allow_html=True)
 else:
-    st.markdown(f'<div class="wait-banner">{signal.reason}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="banner wait">{plan.reason or "صبر کن"}</div>', unsafe_allow_html=True)
 
-st.write("")
+side_fa = {"BUY": "خرید", "SELL": "فروش", "NONE": "بدون معامله"}.get(plan.side, plan.side)
+st.subheader(f"اعداد معامله — {side_fa} {plan.pattern}")
 
-if signal.signal_type != SignalType.WAIT:
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(
-            level_card("نقطه ورود", f"{signal.entry_price:.5f}", signal.order_type.value, "#fbbf24"),
-            unsafe_allow_html=True,
-        )
-    with c2:
-        st.markdown(
-            level_card("حد ضرر", f"{signal.stop_loss:.5f}", f"{signal.sl_pips} پیپ", "#ef4444"),
-            unsafe_allow_html=True,
-        )
-    with c3:
-        st.markdown(
-            level_card("نقطه خروج", f"{signal.take_profit_1:.5f}", f"{signal.tp1_pips} پیپ", "#22c55e"),
-            unsafe_allow_html=True,
-        )
-    distance = abs(price - signal.entry_price) / 0.0001
+c1, c2, c3 = st.columns(3)
+with c1:
+    st.markdown(card("ورود", plan.entry, "لیمیت روی لبه ناحیه", "#fbbf24"), unsafe_allow_html=True)
+with c2:
+    st.markdown(card("حد ضرر SL", plan.sl, f"{plan.sl_pips} پیپ ریسک", "#ef4444"), unsafe_allow_html=True)
+with c3:
+    st.markdown(card("تارگت TP", plan.tp, f"{plan.tp_pips} پیپ سود", "#22c55e"), unsafe_allow_html=True)
+
+if plan.entry:
+    rr = (plan.tp_pips / plan.sl_pips) if plan.sl_pips else 0
     st.info(
-        f"اطمینان ستاپ: **{signal.confidence:.0f}٪** | فاصله قیمت فعلی تا ورود: **{distance:.1f} پیپ**"
+        f"ورود: `{plan.entry:.5f}` &nbsp;|&nbsp; حد ضرر: `{plan.sl:.5f}` &nbsp;|&nbsp; "
+        f"تارگت: `{plan.tp:.5f}` &nbsp;|&nbsp; نسبت سود به ضرر: **1:{rr:.1f}**"
     )
 else:
-    st.warning("الان وارد معامله نشو. صبر کن تا قیمت به ناحیه تازه عرضه یا تقاضا برسد.")
+    st.warning("الان ستاپ RTM معتبر نیست. صبر کن.")
+
+if ctx.alt_plan and ctx.alt_plan.entry:
+    alt = ctx.alt_plan
+    st.caption(
+        f"پلن مخالف: {alt.side} ورود `{alt.entry:.5f}` | SL `{alt.sl:.5f}` | TP `{alt.tp:.5f}`"
+    )
 
 st.markdown("---")
-st.subheader("نمودار نواحی RTM")
-
+st.subheader("نمودار نواحی")
 fig = go.Figure()
-chart = df.tail(120).copy()
-xcol = "timestamps" if "timestamps" in chart.columns else chart.index
+chart = df.tail(130)
+x = chart["timestamps"] if "timestamps" in chart.columns else chart.index
 fig.add_trace(
     go.Candlestick(
-        x=chart[xcol] if "timestamps" in chart.columns else chart.index,
+        x=x,
         open=chart["open"],
         high=chart["high"],
         low=chart["low"],
         close=chart["close"],
-        name="قیمت",
         increasing_line_color="#22c55e",
         decreasing_line_color="#ef4444",
+        name="قیمت",
     )
 )
-
 for zone in ctx.zones[-8:]:
-    color = "rgba(34,197,94,0.16)" if zone.kind == "demand" else "rgba(239,68,68,0.16)"
-    line = "#22c55e" if zone.kind == "demand" else "#ef4444"
-    fig.add_hrect(
-        y0=zone.low,
-        y1=zone.high,
-        fillcolor=color,
-        line_width=0,
-        annotation_text=f"{zone.pattern}{' تازه' if zone.fresh else ''}",
-        annotation_position="top left",
-    )
-    fig.add_hline(y=zone.proximal, line_dash="dot", line_color=line, line_width=1)
-
-if signal.signal_type != SignalType.WAIT:
-    fig.add_hline(y=signal.entry_price, line_dash="dash", line_color="#fbbf24", annotation_text="ورود")
-    fig.add_hline(y=signal.stop_loss, line_dash="dot", line_color="#ef4444", annotation_text="حد ضرر")
-    fig.add_hline(y=signal.take_profit_1, line_dash="dot", line_color="#22c55e", annotation_text="خروج")
-
+    color = "rgba(34,197,94,0.15)" if zone.kind == "demand" else "rgba(239,68,68,0.15)"
+    fig.add_hrect(y0=zone.low, y1=zone.high, fillcolor=color, line_width=0)
+if plan.entry:
+    fig.add_hline(y=plan.entry, line_dash="dash", line_color="#fbbf24", annotation_text="ورود")
+    fig.add_hline(y=plan.sl, line_dash="dot", line_color="#ef4444", annotation_text="SL")
+    fig.add_hline(y=plan.tp, line_dash="dot", line_color="#22c55e", annotation_text="TP")
 fig.update_layout(
     template="plotly_dark",
     height=480,
     xaxis_rangeslider_visible=False,
-    margin=dict(l=10, r=10, t=20, b=10),
+    margin=dict(l=8, r=8, t=16, b=8),
     paper_bgcolor="#0b1020",
     plot_bgcolor="#0b1020",
 )
 st.plotly_chart(fig, use_container_width=True)
-
-with st.expander("جزئیات نواحی و بک‌تست"):
-    if ctx.zones:
-        rows = []
-        for z in ctx.zones[-10:]:
-            rows.append(
-                {
-                    "نوع": "تقاضا" if z.kind == "demand" else "عرضه",
-                    "الگو": z.pattern,
-                    "پایین": f"{z.low:.5f}",
-                    "بالا": f"{z.high:.5f}",
-                    "عرض": f"{z.width_pips:.1f}",
-                    "تازه": "بله" if z.fresh else "خیر",
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-    if st.button("اجرای بک‌تست RTM"):
-        engine = BacktestEngine(strategy=RTMStrategy(config=config), initial_balance=10000, spread_pips=1.2)
-        result = engine.run(df, lookback=min(140, max(40, len(df) // 2)))
-        if result.total_trades:
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("معاملات", result.total_trades)
-            m2.metric("وین‌ریت", f"{result.win_rate:.1f}%")
-            m3.metric("سود (پیپ)", f"{result.total_pnl_pips:.1f}")
-            m4.metric("پرافیت فاکتور", f"{result.profit_factor:.2f}")
-        else:
-            st.write("در این بازه معامله‌ای ثبت نشد.")
