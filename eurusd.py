@@ -230,5 +230,4 @@ fig.update_layout(
     paper_bgcolor="#0b1020",
     plot_bgcolor="#0b1020",
 )
-st.plotly_chart(fig, use_container_width=True)
-art(fig, width="stretch")
+st.plotly_chart(fig, width="stretch")
