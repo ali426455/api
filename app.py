@@ -140,11 +140,11 @@ state = st.session_state.rtm
 df, ctx, plan = state["df"], state["ctx"], state["plan"]
 
 st.title("نقاط معامله RTM — EUR/USD")
-st.caption("سبک Read The Market: ورود لیمیت روی لبه ناحیه، حد ضرر پشت ناحیه، تارگت روی ناحیه مخالف.")
+st.caption("نسخه RTM-2 | اگر هنوز EMA و RSI می‌بینید، در Streamlit روی Reboot app بزنید.")
 
 top1, top2, top3 = st.columns([2, 1, 2])
 with top2:
-    if st.button("ریفرش قیمت", use_container_width=True):
+    if st.button("ریفرش قیمت", width="stretch"):
         live, bid, ask = get_live_price()
         if live:
             state["live"], state["bid"], state["ask"] = live, bid, ask
@@ -231,3 +231,4 @@ fig.update_layout(
     plot_bgcolor="#0b1020",
 )
 st.plotly_chart(fig, use_container_width=True)
+art(fig, width="stretch")
