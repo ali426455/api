@@ -127,7 +127,7 @@ with st.sidebar:
     interval = st.selectbox("تایم‌فریم", ["5m", "15m", "30m", "1h"], index=0)
     max_zone = st.slider("حداکثر عرض ناحیه (پیپ)", 12, 35, 28)
     min_rr = st.slider("حداقل سود به ضرر", 1.0, 3.0, 1.2, 0.1)
-    analyze_btn = st.button("تحلیل مجدد بازار", type="primary", use_container_width=True)
+    analyze_btn = st.button("تحلیل مجدد بازار", type="primary", width="stretch")
     st.caption("ریفرش فقط قیمت را عوض می‌کند. اعداد ورود/حدضرر/تارگت ثابت می‌مانند مگر قیمت به ناحیه برسد.")
 
 config = {"max_zone_pips": max_zone, "min_rr": min_rr}
