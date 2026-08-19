@@ -1,102 +1,51 @@
 """
-اپلیکیشن وب Streamlit برای ربات معاملاتی EUR/USD
-Streamlit Web App for EUR/USD Trading Bot
-
-اجرا در Koyeb:
-1. این ریپازیتوری را push کنید
-2. در Koyeb یک سرویس جدید بسازید
-3. GitHub را انتخاب کنید
-4. Port 8501 را تنظیم کنید
+داشبورد RTM برای اسکالپ EUR/USD
+ورود / حد ضرر / خروج — اگر بازار مناسب نبود: صبر کن
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import yfinance as yf
-import requests
-from datetime import datetime, timedelta
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import sys
 import os
+import sys
+from datetime import datetime
+
+import pandas as pd
+import plotly.graph_objects as go
+import requests
+import streamlit as st
+import yfinance as yf
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from src.strategy import HybridStrategy, SignalType, OrderType
 from src.backtest import BacktestEngine
 from src.data_fetcher import DataFetcher
+from src.rtm import RTMStrategy
+from src.strategy import SignalType
 
 
-# =====================================================
-# تنظیمات صفحه
-# =====================================================
 st.set_page_config(
-    page_title="ربات معاملاتی EUR/USD",
-    page_icon="🔮",
+    page_title="ربات RTM یورو/دلار",
+    page_icon="📉",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# CSS سفارشی برای زبان فارسی
-st.markdown("""
+st.markdown(
+    """
 <style>
     .main { direction: rtl; text-align: right; }
-    .stMetric { direction: rtl; }
-    .css-18e3th9 { padding-top: 2rem; }
-    h1, h2, h3 { color: #00b4d8; }
-    .signal-buy { background: #06d6a0; padding: 10px 20px; border-radius: 10px; color: white; font-weight: bold; }
-    .signal-sell { background: #ef476f; padding: 10px 20px; border-radius: 10px; color: white; font-weight: bold; }
-    .signal-wait { background: #ffd166; padding: 10px 20px; border-radius: 10px; color: #333; font-weight: bold; }
+    h1, h2, h3 { color: #7dd3fc; }
+    .price-box { background:#111827; border:1px solid #334155; border-radius:14px; padding:16px 18px; }
+    .card { background:#111827; border-radius:14px; padding:16px; text-align:center; border:1px solid #334155; }
+    .wait-banner { background:#422006; border:1px solid #f59e0b; color:#fde68a; padding:18px 20px; border-radius:14px; font-size:20px; font-weight:700; }
+    .buy-banner { background:#052e16; border:1px solid #22c55e; color:#bbf7d0; padding:18px 20px; border-radius:14px; font-size:20px; font-weight:700; }
+    .sell-banner { background:#450a0a; border:1px solid #ef4444; color:#fecaca; padding:18px 20px; border-radius:14px; font-size:20px; font-weight:700; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
-# =====================================================
-# عنوان
-# =====================================================
-st.title("🔮 ربات اسکالپ EUR/USD - استراتژی هیبرید")
-st.markdown("---")
-
-
-# =====================================================
-# نوار کناری - تنظیمات
-# =====================================================
-with st.sidebar:
-    st.header("⚙️ تنظیمات استراتژی")
-    
-    # تنظیمات روند
-    st.subheader("روند")
-    ema_fast = st.slider("EMA سریع", 5, 50, 20)
-    ema_slow = st.slider("EMA کند", 20, 200, 50)
-    
-    # تنظیمات RSI
-    st.subheader("RSI")
-    rsi_period = st.slider("دوره RSI", 5, 30, 14)
-    rsi_oversold = st.slider("اشباع فروش", 10, 40, 30)
-    rsi_overbought = st.slider("اشباع خرید", 60, 90, 70)
-    
-    # مدیریت ریسک
-    st.subheader("مدیریت ریسک")
-    rr1 = st.slider("R:R تارگت ۱", 0.5, 3.0, 1.0, 0.1)
-    rr2 = st.slider("R:R تارگت ۲", 1.0, 5.0, 1.5, 0.1)
-    rr3 = st.slider("R:R تارگت ۳", 1.5, 8.0, 2.5, 0.1)
-    atr_mult = st.slider("ضریب ATR برای SL", 0.5, 3.0, 1.5, 0.1)
-    min_conf = st.slider("حداقل اطمینان", 50, 90, 65)
-    
-    # تنظیمات داده
-    st.subheader("داده‌ها")
-    period = st.selectbox("بازه زمانی", ["5d", "1mo", "3mo", "6mo"], index=1)
-    interval = st.selectbox("تایم‌فریم", ["1m", "5m", "15m", "30m", "1h"], index=1)
-    
-    # دکمه اجرا
-    run_btn = st.button("🚀 تحلیل و تولید سیگنال", type="primary", use_container_width=True)
-
-
-# =====================================================
-# توابع کمکی
-# =====================================================
 def _strip_tz(series):
     ts = pd.to_datetime(series)
     try:
@@ -108,20 +57,19 @@ def _strip_tz(series):
             return ts
 
 
-@st.cache_data(ttl=300)  # کش ۵ دقیقه‌ای
+@st.cache_data(ttl=180)
 def fetch_data(period, interval):
-    """دریافت داده‌های تاریخی با پشتیبان نمونه"""
     fetcher = DataFetcher()
     try:
         ticker = yf.Ticker("EURUSD=X")
         df = ticker.history(period=period, interval=interval)
         if df is not None and not df.empty:
             df = df.reset_index()
-            df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-            if 'datetime' in df.columns:
-                df['timestamps'] = _strip_tz(df['datetime'])
-            elif 'date' in df.columns:
-                df['timestamps'] = _strip_tz(df['date'])
+            df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+            if "datetime" in df.columns:
+                df["timestamps"] = _strip_tz(df["datetime"])
+            elif "date" in df.columns:
+                df["timestamps"] = _strip_tz(df["date"])
             return df
     except Exception:
         pass
@@ -129,7 +77,6 @@ def fetch_data(period, interval):
 
 
 def get_live_price():
-    """دریافت قیمت زنده"""
     try:
         url = "https://scanner.tradingview.com/forex/scan"
         payload = {"symbols": {"tickers": ["FX_IDC:EURUSD"]}, "columns": ["close", "bid", "ask"]}
@@ -137,284 +84,215 @@ def get_live_price():
         res = requests.post(url, json=payload, headers=headers, timeout=3)
         if res.status_code == 200 and res.json().get("data"):
             values = res.json()["data"][0]["d"]
-            return float(values[0]), float(values[1]) if values[1] else None, float(values[2]) if values[2] else None
-    except:
+            price = float(values[0])
+            bid = float(values[1]) if values[1] else round(price - 0.00006, 5)
+            ask = float(values[2]) if values[2] else round(price + 0.00006, 5)
+            return price, bid, ask
+    except Exception:
         pass
-    
     try:
-        ticker = yf.Ticker("EURUSD=X")
-        data = ticker.history(period="1d", interval="1m")
+        data = yf.Ticker("EURUSD=X").history(period="1d", interval="1m")
         if not data.empty:
-            price = float(data['Close'].iloc[-1])
+            price = float(data["Close"].iloc[-1])
             return price, round(price - 0.00006, 5), round(price + 0.00006, 5)
-    except:
+    except Exception:
         pass
-    
     return None, None, None
 
 
-def create_strategy_config():
-    """ایجاد تنظیمات استراتژی از مقادیر ورودی"""
+def level_card(title, value, sub, color):
+    return f"""
+    <div class="card" style="border-color:{color};">
+        <div style="color:{color}; font-size:13px;">{title}</div>
+        <div style="color:#fff; font-size:26px; font-weight:800; letter-spacing:0.5px;">{value}</div>
+        <div style="color:#94a3b8; font-size:12px;">{sub}</div>
+    </div>
+    """
+
+
+def run_analysis(period, interval, config):
+    df = fetch_data(period, interval)
+    live, bid, ask = get_live_price()
+    if live and df is not None and not df.empty:
+        df.loc[df.index[-1], "close"] = live
+    strategy = RTMStrategy(config=config)
+    ctx, signal = strategy.analyze(df)
     return {
-        'trend_ema_fast': ema_fast,
-        'trend_ema_slow': ema_slow,
-        'rsi_period': rsi_period,
-        'rsi_oversold': rsi_oversold,
-        'rsi_overbought': rsi_overbought,
-        'use_ema_cross': True,
-        'use_rsi_filter': True,
-        'use_kronos_prediction': False,
-        'risk_reward_1': rr1,
-        'risk_reward_2': rr2,
-        'risk_reward_3': rr3,
-        'atr_sl_multiplier': atr_mult,
-        'max_sl_pips': 30,
-        'min_sl_pips': 8,
-        'min_confidence': min_conf,
-        'high_confidence': 75,
-        'trading_hours_start': 8,
-        'trading_hours_end': 20,
-        'filter_high_impact_news': False,
+        "df": df,
+        "signal": signal,
+        "ctx": ctx,
+        "live": live,
+        "bid": bid,
+        "ask": ask,
+        "updated": datetime.now().strftime("%H:%M:%S"),
     }
 
 
-# =====================================================
-# محتوای اصلی
-# =====================================================
-if run_btn or True:  # همیشه اجرا برای نمایش اولیه
-    
-    # دریافت داده‌ها
-    with st.spinner("📊 دریافت داده‌ها..."):
-        df = fetch_data(period, interval)
-    
-    if df is None or df.empty:
-        st.error("❌ خطا در دریافت داده‌ها")
-        st.stop()
-    
-    # دریافت قیمت زنده
-    live_price, bid, ask = get_live_price()
-    
-    if live_price:
-        # به‌روزرسانی آخرین کندل
-        df.loc[df.index[-1], 'close'] = live_price
-    
-    # ایجاد استراتژی
-    config = create_strategy_config()
-    strategy = HybridStrategy(config=config)
-    
-    # تحلیل روند
-    trend = strategy.analyze_trend(df)
-    rsi_data = strategy.analyze_rsi(df)
-    
-    # تولید سیگنال
-    signal = strategy.generate_signal(df)
-    
-    # =====================================================
-    # نمایش سیگنال اصلی
-    # =====================================================
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        if live_price:
-            st.metric("قیمت زنده EUR/USD", f"{live_price:.5f}", 
-                     delta=f"{((live_price - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100):.3f}%")
-        else:
-            st.metric("قیمت", f"{df['close'].iloc[-1]:.5f}")
-    
-    with col2:
-        if signal.signal_type == SignalType.BUY:
-            st.success(f"🟢 {signal.reason}")
-        elif signal.signal_type == SignalType.SELL:
-            st.error(f"🔴 {signal.reason}")
-        else:
-            st.warning(f"⚪ {signal.reason}")
-    
-    with col3:
-        st.metric("اطمینان", f"{signal.confidence:.0f}%")
-    
-    with col4:
-        st.metric("روند", trend['trend_text'])
-    
-    st.markdown("---")
-    
-    # =====================================================
-    # کارت‌های سطوح معاملاتی
-    # =====================================================
-    if signal.signal_type != SignalType.WAIT:
-        st.subheader("🎯 سطوح معاملاتی")
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.markdown(f"""
-            <div style="background: #1a1a2e; padding: 15px; border-radius: 10px; border: 2px solid #00b4d8; text-align: center;">
-                <span style="color: #00b4d8; font-size: 12px;">ورود</span>
-                <div style="color: #FFD700; font-size: 20px; font-weight: bold;">{signal.entry_price:.5f}</div>
-                <small style="color: #888;">{signal.order_type.value}</small>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"""
-            <div style="background: #1a1a2e; padding: 15px; border-radius: 10px; border: 2px solid #ef476f; text-align: center;">
-                <span style="color: #ef476f; font-size: 12px;">حد ضرر</span>
-                <div style="color: #ef476f; font-size: 20px; font-weight: bold;">{signal.stop_loss:.5f}</div>
-                <small style="color: #888;">{signal.sl_pips} پیپ</small>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown(f"""
-            <div style="background: #1a1a2e; padding: 15px; border-radius: 10px; border: 2px solid #06d6a0; text-align: center;">
-                <span style="color: #06d6a0; font-size: 12px;">تارگت ۱</span>
-                <div style="color: #06d6a0; font-size: 20px; font-weight: bold;">{signal.take_profit_1:.5f}</div>
-                <small style="color: #888;">{signal.tp1_pips} پیپ</small>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col4:
-            st.markdown(f"""
-            <div style="background: #1a1a2e; padding: 15px; border-radius: 10px; border: 2px solid #06d6a0; text-align: center;">
-                <span style="color: #06d6a0; font-size: 12px;">تارگت ۲</span>
-                <div style="color: #06d6a0; font-size: 20px; font-weight: bold;">{signal.take_profit_2:.5f}</div>
-                <small style="color: #888;">{signal.tp2_pips} پیپ</small>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col5:
-            st.markdown(f"""
-            <div style="background: #1a1a2e; padding: 15px; border-radius: 10px; border: 2px solid #9b5de5; text-align: center;">
-                <span style="color: #9b5de5; font-size: 12px;">تارگت ۳</span>
-                <div style="color: #9b5de5; font-size: 20px; font-weight: bold;">{signal.take_profit_3:.5f}</div>
-                <small style="color: #888;">{signal.tp3_pips} پیپ</small>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # راهنمای مدیریت ریسک
-        st.info(f"💡 **مدیریت ریسک:** در رسیدن به TP1 ({signal.take_profit_1:.5f}) ۵۰٪ سود را ببندید. حد ضرر را به نقطه ورود منتقل کنید (ریسک‌فری).")
-    
-    st.markdown("---")
-    
-    # =====================================================
-    # نمودار قیمت
-    # =====================================================
-    st.subheader("📈 نمودار قیمت")
-    
-    fig = go.Figure()
-    
-    # کندل‌ها
-    df_chart = df.tail(100)
-    fig.add_trace(go.Candlestick(
-        x=df_chart['timestamps'],
-        open=df_chart['open'],
-        high=df_chart['high'],
-        low=df_chart['low'],
-        close=df_chart['close'],
-        name="قیمت",
-        increasing_line_color='#06d6a0',
-        decreasing_line_color='#ef476f'
-    ))
-    
-    # خطوط سیگنال
-    if signal.signal_type != SignalType.WAIT:
-        fig.add_hline(y=signal.entry_price, line_dash="dash", line_color="#FFD700", annotation_text="Entry")
-        fig.add_hline(y=signal.stop_loss, line_dash="dot", line_color="#ef476f", annotation_text="SL")
-        fig.add_hline(y=signal.take_profit_1, line_dash="dot", line_color="#06d6a0", annotation_text="TP1")
-        fig.add_hline(y=signal.take_profit_2, line_dash="dot", line_color="#00b4d8", annotation_text="TP2")
-        fig.add_hline(y=signal.take_profit_3, line_dash="dot", line_color="#9b5de5", annotation_text="TP3")
-    
-    fig.update_layout(
-        template="plotly_dark",
-        height=450,
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=10, r=10, t=30, b=10)
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # =====================================================
-    # بک‌تست
-    # =====================================================
-    st.markdown("---")
-    st.subheader("🧪 بک‌تست")
-    
-    with st.spinner("در حال اجرای بک‌تست..."):
-        engine = BacktestEngine(strategy=strategy, initial_balance=10000, spread_pips=1.2)
-        result = engine.run(df, lookback=min(120, len(df) // 2))
-    
-    # نمایش نتایج
-    if result.total_trades > 0:
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.metric("تعداد معاملات", result.total_trades)
-        with col2:
-            st.metric("Win Rate", f"{result.win_rate:.1f}%")
-        with col3:
-            st.metric("سود خالص (پیپ)", f"{result.total_pnl_pips:.1f}")
-        with col4:
-            st.metric("Profit Factor", f"{result.profit_factor:.2f}")
-        with col5:
-            st.metric("شارپ", f"{result.sharpe_ratio:.2f}")
-        
-        # نمودار بک‌تست
-        fig2 = make_subplots(rows=2, cols=1, subplot_titles=("منحنی سرمایه", "سود/زیان هر معامله"))
-        
-        if result.equity_curve:
-            fig2.add_trace(go.Scatter(y=result.equity_curve, mode='lines', name='سرمایه',
-                                     line=dict(color='#00b4d8')), row=1, col=1)
-        
-        if result.trades:
-            pnls = [t.pnl_pips for t in result.trades]
-            colors = ['#06d6a0' if p > 0 else '#ef476f' for p in pnls]
-            fig2.add_trace(go.Bar(y=pnls, marker_color=colors, name='P/L'), row=2, col=1)
-        
-        fig2.update_layout(template="plotly_dark", height=400, showlegend=False)
-        st.plotly_chart(fig2, use_container_width=True)
-        
-    else:
-        st.warning("معامله‌ای در بازه زمانی انتخاب شده یافت نشد.")
-    
-    # =====================================================
-    # جدول معاملات اخیر
-    # =====================================================
-    if result.trades:
-        st.subheader("📋 آخرین معاملات")
-        
-        trades_data = []
-        for t in result.trades[-10:]:
-            trades_data.append({
-                'زمان': str(t.entry_time)[:16],
-                'جهت': t.direction.value,
-                'ورود': f"{t.entry_price:.5f}",
-                'خروج': f"{t.exit_price:.5f}" if t.exit_price else "-",
-                'P/L (پیپ)': f"{t.pnl_pips:+.1f}",
-                'نتیجه': "✅ سود" if t.result == 'win' else ("❌ زیان" if t.result == 'loss' else "➖ سرریز")
-            })
-        
-        st.dataframe(pd.DataFrame(trades_data), use_container_width=True)
-    
-    # =====================================================
-    # اطلاعات تکمیلی
-    # =====================================================
-    st.markdown("---")
-    with st.expander("📊 اطلاعات تحلیل تکنیکال"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**روند:**")
-            st.write(f"- EMA {ema_fast}: {trend['ema_fast']:.5f}")
-            st.write(f"- EMA {ema_slow}: {trend['ema_slow']:.5f}")
-            st.write(f"- وضعیت: {trend['trend_text']}")
-        
-        with col2:
-            st.write("**RSI:**")
-            st.write(f"- مقدار: {rsi_data['rsi']:.1f}")
-            st.write(f"- سیگنال: {rsi_data['rsi_signal']}")
-    
-    # تاریخ آخرین به‌روزرسانی
-    st.markdown("---")
-    st.caption(f"🕐 آخرین به‌روزرسانی: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+with st.sidebar:
+    st.header("تنظیمات RTM")
+    period = st.selectbox("بازه داده", ["5d", "1mo", "3mo"], index=1)
+    interval = st.selectbox("تایم‌فریم", ["5m", "15m", "30m", "1h"], index=0)
+    swing_n = st.slider("حساسیت سوئینگ", 2, 6, 3)
+    max_zone = st.slider("حداکثر عرض ناحیه (پیپ)", 10, 35, 22)
+    min_rr = st.slider("حداقل نسبت سود به ضرر", 1.0, 3.0, 1.5, 0.1)
+    min_conf = st.slider("حداقل اطمینان", 50, 85, 62)
+    analyze_btn = st.button("تحلیل مجدد بازار", type="primary", use_container_width=True)
+    st.caption("دکمه ریفرش بالا فقط قیمت را عوض می‌کند، تحلیل را تکرار نمی‌کند.")
 
+
+config = {
+    "swing_n": swing_n,
+    "max_zone_pips": max_zone,
+    "min_rr": min_rr,
+    "min_confidence": min_conf,
+}
+
+if "analysis" not in st.session_state or analyze_btn:
+    with st.spinner("در حال خواندن ساختار بازار و نواحی RTM..."):
+        st.session_state.analysis = run_analysis(period, interval, config)
+
+state = st.session_state.analysis
+df = state["df"]
+signal = state["signal"]
+ctx = state["ctx"]
+
+st.title("ربات اسکالپ EUR/USD — استراتژی RTM")
+st.caption("ورود فقط روی ناحیه عرضه/تقاضا. اگر ستاپ نباشد، صبر کن.")
+
+price_col, btn_col, meta_col = st.columns([2.2, 1, 2])
+with btn_col:
+    refresh_price = st.button("ریفرش قیمت", use_container_width=True)
+
+if refresh_price:
+    live, bid, ask = get_live_price()
+    if live:
+        state["live"] = live
+        state["bid"] = bid
+        state["ask"] = ask
+        state["updated"] = datetime.now().strftime("%H:%M:%S")
+    else:
+        st.warning("قیمت زنده الان در دسترس نبود. همان قیمت قبلی نمایش داده می‌شود.")
+
+live = state.get("live")
+price = live if live else float(df["close"].iloc[-1])
+
+with price_col:
+    prev = float(df["close"].iloc[-2]) if len(df) > 1 else price
+    delta = (price - prev) / prev * 100 if prev else 0
+    st.metric("قیمت زنده EUR/USD", f"{price:.5f}", f"{delta:+.3f}%")
+
+with meta_col:
+    bid = state.get("bid")
+    ask = state.get("ask")
+    spread = f"{((ask - bid) / 0.0001):.1f} پیپ" if bid and ask else "—"
+    st.write(f"ساختار: **{ctx.structure_text}**")
+    st.write(f"اسپرد: **{spread}** | به‌روزرسانی قیمت: **{state.get('updated', '—')}**")
+
+st.markdown("---")
+
+if signal.signal_type == SignalType.BUY:
+    st.markdown(f'<div class="buy-banner">خرید — {signal.reason}</div>', unsafe_allow_html=True)
+elif signal.signal_type == SignalType.SELL:
+    st.markdown(f'<div class="sell-banner">فروش — {signal.reason}</div>', unsafe_allow_html=True)
 else:
-    st.info("👈 از نوار کناری تنظیمات را انتخاب کنید و دکمه **تحلیل و تولید سیگنال** را بزنید.")
+    st.markdown(f'<div class="wait-banner">{signal.reason}</div>', unsafe_allow_html=True)
+
+st.write("")
+
+if signal.signal_type != SignalType.WAIT:
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(
+            level_card("نقطه ورود", f"{signal.entry_price:.5f}", signal.order_type.value, "#fbbf24"),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            level_card("حد ضرر", f"{signal.stop_loss:.5f}", f"{signal.sl_pips} پیپ", "#ef4444"),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            level_card("نقطه خروج", f"{signal.take_profit_1:.5f}", f"{signal.tp1_pips} پیپ", "#22c55e"),
+            unsafe_allow_html=True,
+        )
+    distance = abs(price - signal.entry_price) / 0.0001
+    st.info(
+        f"اطمینان ستاپ: **{signal.confidence:.0f}٪** | فاصله قیمت فعلی تا ورود: **{distance:.1f} پیپ**"
+    )
+else:
+    st.warning("الان وارد معامله نشو. صبر کن تا قیمت به ناحیه تازه عرضه یا تقاضا برسد.")
+
+st.markdown("---")
+st.subheader("نمودار نواحی RTM")
+
+fig = go.Figure()
+chart = df.tail(120).copy()
+xcol = "timestamps" if "timestamps" in chart.columns else chart.index
+fig.add_trace(
+    go.Candlestick(
+        x=chart[xcol] if "timestamps" in chart.columns else chart.index,
+        open=chart["open"],
+        high=chart["high"],
+        low=chart["low"],
+        close=chart["close"],
+        name="قیمت",
+        increasing_line_color="#22c55e",
+        decreasing_line_color="#ef4444",
+    )
+)
+
+for zone in ctx.zones[-8:]:
+    color = "rgba(34,197,94,0.16)" if zone.kind == "demand" else "rgba(239,68,68,0.16)"
+    line = "#22c55e" if zone.kind == "demand" else "#ef4444"
+    fig.add_hrect(
+        y0=zone.low,
+        y1=zone.high,
+        fillcolor=color,
+        line_width=0,
+        annotation_text=f"{zone.pattern}{' تازه' if zone.fresh else ''}",
+        annotation_position="top left",
+    )
+    fig.add_hline(y=zone.proximal, line_dash="dot", line_color=line, line_width=1)
+
+if signal.signal_type != SignalType.WAIT:
+    fig.add_hline(y=signal.entry_price, line_dash="dash", line_color="#fbbf24", annotation_text="ورود")
+    fig.add_hline(y=signal.stop_loss, line_dash="dot", line_color="#ef4444", annotation_text="حد ضرر")
+    fig.add_hline(y=signal.take_profit_1, line_dash="dot", line_color="#22c55e", annotation_text="خروج")
+
+fig.update_layout(
+    template="plotly_dark",
+    height=480,
+    xaxis_rangeslider_visible=False,
+    margin=dict(l=10, r=10, t=20, b=10),
+    paper_bgcolor="#0b1020",
+    plot_bgcolor="#0b1020",
+)
+st.plotly_chart(fig, use_container_width=True)
+
+with st.expander("جزئیات نواحی و بک‌تست"):
+    if ctx.zones:
+        rows = []
+        for z in ctx.zones[-10:]:
+            rows.append(
+                {
+                    "نوع": "تقاضا" if z.kind == "demand" else "عرضه",
+                    "الگو": z.pattern,
+                    "پایین": f"{z.low:.5f}",
+                    "بالا": f"{z.high:.5f}",
+                    "عرض": f"{z.width_pips:.1f}",
+                    "تازه": "بله" if z.fresh else "خیر",
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    if st.button("اجرای بک‌تست RTM"):
+        engine = BacktestEngine(strategy=RTMStrategy(config=config), initial_balance=10000, spread_pips=1.2)
+        result = engine.run(df, lookback=min(140, max(40, len(df) // 2)))
+        if result.total_trades:
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("معاملات", result.total_trades)
+            m2.metric("وین‌ریت", f"{result.win_rate:.1f}%")
+            m3.metric("سود (پیپ)", f"{result.total_pnl_pips:.1f}")
+            m4.metric("پرافیت فاکتور", f"{result.profit_factor:.2f}")
+        else:
+            st.write("در این بازه معامله‌ای ثبت نشد.")
