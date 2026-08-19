@@ -20,8 +20,9 @@ from plotly.subplots import make_subplots
 import sys
 import os
 
-# اضافه کردن مسیر src
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 from src.strategy import HybridStrategy, SignalType, OrderType
 from src.backtest import BacktestEngine
@@ -96,24 +97,35 @@ with st.sidebar:
 # =====================================================
 # توابع کمکی
 # =====================================================
+def _strip_tz(series):
+    ts = pd.to_datetime(series)
+    try:
+        return ts.dt.tz_localize(None)
+    except TypeError:
+        try:
+            return ts.dt.tz_convert(None)
+        except Exception:
+            return ts
+
+
 @st.cache_data(ttl=300)  # کش ۵ دقیقه‌ای
 def fetch_data(period, interval):
-    """دریافت داده‌های تاریخی"""
+    """دریافت داده‌های تاریخی با پشتیبان نمونه"""
+    fetcher = DataFetcher()
     try:
         ticker = yf.Ticker("EURUSD=X")
         df = ticker.history(period=period, interval=interval)
-        if df.empty:
-            return None
-        df = df.reset_index()
-        df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-        if 'datetime' in df.columns:
-            df['timestamps'] = pd.to_datetime(df['datetime']).dt.tz_localize(None)
-        elif 'date' in df.columns:
-            df['timestamps'] = pd.to_datetime(df['date']).dt.tz_localize(None)
-        return df
-    except Exception as e:
-        st.error(f"خطا در دریافت داده: {e}")
-        return None
+        if df is not None and not df.empty:
+            df = df.reset_index()
+            df.columns = [c.lower().replace(' ', '_') for c in df.columns]
+            if 'datetime' in df.columns:
+                df['timestamps'] = _strip_tz(df['datetime'])
+            elif 'date' in df.columns:
+                df['timestamps'] = _strip_tz(df['date'])
+            return df
+    except Exception:
+        pass
+    return fetcher._generate_sample_data()
 
 
 def get_live_price():
