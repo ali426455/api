@@ -32,6 +32,8 @@ class DataFetcher:
         interval : تایم‌فریم (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
         """
         try:
+            if interval == "1m" and period not in ("1d", "5d"):
+                period = "5d"
             ticker = yf.Ticker(symbol)
             df = ticker.history(period=period, interval=interval)
             

@@ -51,6 +51,8 @@ def _strip_tz(series):
 @st.cache_data(ttl=180)
 def fetch_data(period, interval):
     fetcher = DataFetcher()
+    if interval == "1m" and period not in ("1d", "5d"):
+        period = "5d"
     try:
         df = yf.Ticker("EURUSD=X").history(period=period, interval=interval)
         if df is not None and not df.empty:
@@ -124,7 +126,9 @@ def card(title, value, sub, color):
 with st.sidebar:
     st.header("تنظیمات RTM")
     period = st.selectbox("بازه", ["5d", "1mo", "3mo"], index=1)
-    interval = st.selectbox("تایم‌فریم", ["5m", "15m", "30m", "1h"], index=0)
+    interval = st.selectbox("تایم‌فریم", ["1m", "5m", "15m", "30m", "1h"], index=0)
+    if interval == "1m":
+        st.caption("تایم ۱ دقیقه فقط با بازه ۵ روز کار می‌کند.")
     max_zone = st.slider("حداکثر عرض ناحیه (پیپ)", 12, 35, 28)
     min_rr = st.slider("حداقل سود به ضرر", 1.0, 3.0, 1.2, 0.1)
     analyze_btn = st.button("تحلیل مجدد بازار", type="primary", width="stretch")
